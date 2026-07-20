@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEnrich. Enrich leads at wholesale price.</title>
+<meta name="description" content="Open-source lead enrichment waterfall. Bring your own provider keys, pay about $0.01 per verified lead. Free local engine, MCP server for AI agents. AGPL-3.0.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0a; --panel:#0e0e0e; --ink:#ececec; --dim:#9a9a9a; --faint:#5c5c5c;
+    --line:#1e1e1e; --line2:#2e2e2e; --good:#d8d8d8;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:99; opacity:.05;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  ::selection{background:var(--ink); color:var(--bg)}
+  a{color:var(--ink)}
+  .wrap{max-width:880px; margin:0 auto; padding:0 24px}
+
+  header{border-bottom:1px solid var(--line)}
+  .nav{display:flex; justify-content:space-between; align-items:center; padding:20px 0}
+  .mark{font-weight:600; letter-spacing:.08em; font-size:14px}
+  .mark .open{color:var(--faint)}
+  .nav a.cta{font-size:13px; color:var(--dim); text-decoration:none; border:1px solid var(--line2); padding:8px 14px; transition:all .2s}
+  .nav a.cta:hover{color:var(--bg); background:var(--ink); border-color:var(--ink)}
+
+  .hero{padding:96px 0 72px; border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:12px; letter-spacing:.22em; color:var(--faint); text-transform:uppercase; margin-bottom:28px}
+  h1{font-size:clamp(26px,5vw,44px); font-weight:500; line-height:1.25; letter-spacing:-.01em; max-width:20ch}
+  h1 .shine{
+    background:linear-gradient(100deg,#ffffff 0%,#8f8f8f 45%,#ffffff 90%);
+    background-size:200% 100%; -webkit-background-clip:text; background-clip:text; color:transparent;
+    animation:sheen 7s linear infinite;
+  }
+  @keyframes sheen{to{background-position:-200% 0}}
+  .sub{margin-top:28px; color:var(--dim); max-width:58ch}
+  .sub b{color:var(--ink); font-weight:500}
+
+  form.wl{margin-top:44px; display:flex; max-width:520px; border:1px solid var(--line2)}
+  form.wl input[type=email]{
+    flex:1; min-width:0; background:transparent; border:0; outline:0; color:var(--ink);
+    font:inherit; font-size:14px; padding:14px 16px;
+  }
+  form.wl input[type=email]::placeholder{color:var(--faint)}
+  form.wl button{
+    background:var(--ink); color:var(--bg); border:0; font:inherit; font-size:13px; font-weight:600;
+    letter-spacing:.06em; padding:14px 22px; cursor:pointer; white-space:nowrap; transition:opacity .2s;
+  }
+  form.wl button:hover{opacity:.85}
+  form.wl:focus-within{border-color:var(--dim)}
+  .hp{position:absolute; left:-9999px; opacity:0; height:0; width:0}
+  .note{margin-top:14px; font-size:12px; color:var(--faint)}
+  .msg{margin-top:14px; font-size:13px; min-height:20px}
+  .msg.ok{color:var(--good)}
+  .msg.err{color:#c96b6b}
+
+  section{padding:72px 0; border-bottom:1px solid var(--line)}
+  .label{font-size:12px; letter-spacing:.22em; color:var(--faint); text-transform:uppercase; margin-bottom:36px}
+
+  .ledger{border:1px solid var(--line2); background:var(--panel)}
+  .ledger .row{
+    display:grid; grid-template-columns:1.4fr 1fr .7fr; gap:12px; align-items:baseline;
+    padding:14px 18px; border-bottom:1px dashed var(--line2); font-size:13.5px;
+  }
+  .ledger .row:last-child{border-bottom:0}
+  .ledger .head{color:var(--faint); font-size:11px; letter-spacing:.14em; text-transform:uppercase}
+  .ledger .them{color:var(--dim); text-decoration:line-through; text-decoration-color:#4a4a4a; text-decoration-thickness:1px}
+  .ledger .us{text-align:right; font-weight:600; font-variant-numeric:tabular-nums}
+  .ledger .total{background:#111; font-weight:500}
+  .ledger .total .us{color:#fff}
+
+  .fall .step{margin-bottom:26px}
+  .fall .meta{display:flex; justify-content:space-between; font-size:13px; margin-bottom:8px}
+  .fall .meta .who{color:var(--ink)}
+  .fall .meta .tag{color:var(--faint)}
+  .fall .bar{height:10px; background:var(--ink); transition:width .6s}
+  .fall .step:nth-child(2) .bar{opacity:.75}
+  .fall .step:nth-child(3) .bar{opacity:.55}
+  .fall .step:nth-child(4) .bar{opacity:.4}
+  .fall .step:nth-child(5) .bar{opacity:.28}
+  .fall .cap{font-size:12px; color:var(--faint); margin-top:18px}
+
+  .how{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line)}
+  .how .cell{background:var(--bg); padding:28px 22px}
+  .how .n{font-size:12px; color:var(--faint); margin-bottom:14px}
+  .how h3{font-size:15px; font-weight:600; margin-bottom:12px}
+  .how p{font-size:13.5px; color:var(--dim)}
+
+  .cta2{text-align:left}
+  .cta2 h2{font-size:clamp(20px,3.4vw,30px); font-weight:500; max-width:24ch}
+
+  footer{padding:36px 0 64px; display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--faint)}
+
+  .reveal{opacity:0; transform:translateY(14px); animation:up .7s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes up{to{opacity:1; transform:none}}
+  .d1{animation-delay:.05s}.d2{animation-delay:.15s}.d3{animation-delay:.25s}.d4{animation-delay:.35s}
+
+  @media (max-width:720px){
+    .how{grid-template-columns:1fr}
+    .ledger .row{grid-template-columns:1.2fr 1fr .8fr; font-size:12.5px; gap:8px}
+    form.wl{flex-direction:column}
+    form.wl button{padding:14px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .reveal{animation:none; opacity:1; transform:none}
+    h1 .shine{animation:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <div class="mark"><span class="open">OPEN</span>ENRICH</div>
+    <a class="cta" href="#waitlist">JOIN WAITLIST</a>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow reveal d1">Open-source enrichment waterfall</p>
+      <h1 class="reveal d2">Clay charges $495/mo for API pass-through. <span class="shine">Run it yourself for pennies.</span></h1>
+      <p class="sub reveal d3">OpenEnrich is the enrichment engine you self-host. A <b>free local engine</b> resolves what it can at zero cost, then unresolved rows fall through a waterfall of data providers using <b>your own API keys</b>, about <b>$0.01 per verified lead</b>. Your AI agent runs it over MCP.</p>
+      <form class="wl reveal d4" id="waitlist" autocomplete="off">
+        <input type="email" name="email" placeholder="you@company.com" required aria-label="Email address">
+        <input class="hp" type="text" name="company_url" tabindex="-1" aria-hidden="true">
+        <button type="submit">GET EARLY ACCESS</button>
+      </form>
+      <p class="msg" role="status" aria-live="polite"></p>
+      <p class="note">AGPL-3.0. Self-hosting stays free forever. No credits, no seats.</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <p class="label">The math</p>
+      <div class="ledger">
+        <div class="row head"><span>What you need</span><span>Retail</span><span class="us" style="font-weight:400">Wholesale</span></div>
+        <div class="row"><span>Verified work email</span><span class="them">$167 to $495/mo plans</span><span class="us">$0.01</span></div>
+        <div class="row"><span>Email + company data</span><span class="them">credits, re-billed</span><span class="us">$0.03</span></div>
+        <div class="row"><span>Mobile number</span><span class="them">premium credits</span><span class="us">$0.05</span></div>
+        <div class="row"><span>Full person profile</span><span class="them">$15k to $40k/yr</span><span class="us">$0.28</span></div>
+        <div class="row total"><span>A $120 Clay list</span><span></span><span class="us">about $10</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="label">The waterfall</p>
+      <div class="fall">
+        <div class="step"><div class="meta"><span class="who">local engine</span><span class="tag">$0, no keys</span></div><div class="bar" style="width:100%"></div></div>
+        <div class="step"><div class="meta"><span class="who">prospeo</span><span class="tag">$0.01</span></div><div class="bar" style="width:56%"></div></div>
+        <div class="step"><div class="meta"><span class="who">leadmagic</span><span class="tag">$0.01 to $0.03</span></div><div class="bar" style="width:34%"></div></div>
+        <div class="step"><div class="meta"><span class="who">fullenrich</span><span class="tag">waterfall of 15+</span></div><div class="bar" style="width:18%"></div></div>
+        <div class="step"><div class="meta"><span class="who">people data labs</span><span class="tag">$0.28</span></div><div class="bar" style="width:8%"></div></div>
+        <p class="cap">Bars are rows still unresolved. Each step only bills what it verifies. Nothing is ever billed twice.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="label">How it works</p>
+      <div class="how">
+        <div class="cell">
+          <p class="n">01</p>
+          <h3>Free engine first</h3>
+          <p>Crawls the company site, infers email patterns, verifies against the mail server. Zero keys, zero cost, roughly 30 to 50 percent coverage. Honest ceiling, stated up front.</p>
+        </div>
+        <div class="cell">
+          <p class="n">02</p>
+          <h3>Your keys, wholesale</h3>
+          <p>Unresolved rows fall through providers in your order: Prospeo, LeadMagic, FullEnrich, People Data Labs and more. One verified hit, one penny-scale charge.</p>
+        </div>
+        <div class="cell">
+          <p class="n">03</p>
+          <h3>Your agent runs it</h3>
+          <p>Built-in MCP server. Claude Code and other agents enrich from a CSV or your CRM directly. The pipeline is deterministic: zero LLM tokens at runtime.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta2">
+    <div class="wrap">
+      <h2>Open source lands with v0. The waitlist hears first.</h2>
+      <p class="sub" style="margin-top:16px">Tell us your stack when you sign up and it shapes the roadmap.</p>
+      <p style="margin-top:24px"><a class="cta" style="font-size:13px; color:var(--dim); text-decoration:none; border:1px solid var(--line2); padding:10px 16px" href="#waitlist">BACK TO WAITLIST</a></p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:0">
+    <span>OPENENRICH</span>
+    <span>AGPL-3.0 · self-hosting free forever · 2026</span>
+  </div>
+</footer>
+
+<script>
+  const form = document.querySelector("form.wl");
+  const msg = document.querySelector(".msg");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = form.email.value.trim();
+    const hp = form.company_url.value;
+    msg.className = "msg"; msg.textContent = "...";
+    try {
+      const r = await fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, hp })
+      });
+      if (r.ok) {
+        msg.className = "msg ok";
+        msg.textContent = "You are on the list. We only email when v0 ships.";
+        form.reset();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        msg.className = "msg err";
+        msg.textContent = d.error || "Something broke. Try again.";
+      }
+    } catch {
+      msg.className = "msg err";
+      msg.textContent = "Network error. Try again.";
+    }
+  });
+</script>
+</body>
+</html>

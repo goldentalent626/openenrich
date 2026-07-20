@@ -1,0 +1,14 @@
+{
+  "name": "openenrich-landing",
+  "account_id": "6c4c0e8f70875da35118dd70d74f58a8",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "kv_namespaces": [
+    { "binding": "WAITLIST", "id": "4f6c6f8a5d0448f58cfcb06841f1b327" }
+  ]
+}
