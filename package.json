@@ -10,7 +10,8 @@
   "scripts": {
     "cli": "tsx src/cli.ts",
     "mcp": "tsx src/mcp.ts",
-    "test": "tsx --test test/enrich.test.ts"
+    "test": "tsx --test test/enrich.test.ts",
+    "web": "tsx src/web.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
