@@ -1,0 +1,24 @@
+{
+  "name": "openenrich",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpenEnrich v0 MVP — CSV lead enrichment waterfall with a free local engine, cost ledger, CLI and MCP server.",
+  "type": "module",
+  "bin": {
+    "openenrich": "src/cli.ts"
+  },
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "mcp": "tsx src/mcp.ts",
+    "test": "tsx --test test/enrich.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^20.14.0"
+  }
+}
