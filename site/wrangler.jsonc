@@ -10,5 +10,9 @@
   },
   "kv_namespaces": [
     { "binding": "WAITLIST", "id": "4f6c6f8a5d0448f58cfcb06841f1b327" }
+  ],
+  "routes": [
+    { "pattern": "openenrich.dev", "custom_domain": true },
+    { "pattern": "www.openenrich.dev", "custom_domain": true }
   ]
 }
