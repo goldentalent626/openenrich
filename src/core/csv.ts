@@ -1,5 +1,3 @@
-/** Tiny CSV reader/writer. Handles quoted fields, commas, and escaped quotes. */
-
 export function parseCsv(text: string): Record<string, string>[] {
   const rows = splitRows(text);
   if (!rows.length) return [];
@@ -7,7 +5,7 @@ export function parseCsv(text: string): Record<string, string>[] {
   const out: Record<string, string>[] = [];
   for (let i = 1; i < rows.length; i++) {
     const cells = rows[i];
-    if (cells.length === 1 && cells[0] === "") continue; // skip blank line
+    if (cells.length === 1 && cells[0] === "") continue;
     const record: Record<string, string> = {};
     header.forEach((h, idx) => {
       record[h.trim()] = (cells[idx] ?? "").trim();
