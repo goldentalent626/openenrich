@@ -1,9 +1,12 @@
-import type { NormalizedRow, Provider, Result, Row } from "./types.js";
+import type { Budget, LookupContext, NormalizedRow, Provider, Result, Row } from "./types.js";
 import { normalizeRow, cacheKey } from "./normalize.js";
+import { DomainMemory } from "./domains.js";
 import { Cache } from "./cache.js";
 
 export interface EnrichContext {
   cache?: Cache;
+  domains?: DomainMemory;
+  budget?: Budget;
 }
 
 export async function enrichRow(
@@ -15,13 +18,19 @@ export async function enrichRow(
   if (!row) return null;
 
   const { cache } = ctx;
+  const domains = ctx.domains ?? cache?.domains ?? new DomainMemory();
+  const budget = ctx.budget ?? { max: Infinity, spent: 0 };
+
   const key = cache ? cacheKey(row) : "";
   if (cache) {
     const hit = cache.get(key);
     if (hit) return { ...hit, cost: 0, method: "cache" };
   }
 
-  const result = await runWaterfall(row, providers);
+  const { result, spend } = await runWaterfall(row, providers, { domains }, budget);
+  budget.spent += spend;
+
+  if (result?.verified) domains.learnFromEmail(row, result.email, result.method);
   if (cache && result) cache.set(key, result);
   return result;
 }
@@ -29,13 +38,23 @@ export async function enrichRow(
 async function runWaterfall(
   row: NormalizedRow,
   providers: Provider[],
-): Promise<Result | null> {
+  lookup: LookupContext,
+  budget: Budget,
+): Promise<{ result: Result | null; spend: number }> {
   let best: Result | null = null;
+  let spend = 0;
+
   for (const provider of providers) {
-    const res = await provider.lookup(row);
+    if (provider.cost > 0 && budget.spent + spend + provider.cost > budget.max) continue;
+
+    const res = await provider.lookup(row, lookup);
     if (!res) continue;
-    if (res.verified) return res;
+    // Providers bill on an answer, not on a miss.
+    spend += provider.cost;
+
+    if (res.verified) return { result: { ...res, cost: spend }, spend };
     best ??= res;
   }
-  return best;
+
+  return { result: best ? { ...best, cost: spend } : null, spend };
 }

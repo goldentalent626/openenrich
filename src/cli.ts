@@ -1,146 +1,249 @@
-#!/usr/bin/env -S npx tsx
-import { readFileSync, writeFileSync } from "node:fs";
+#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseCsv, toCsv } from "./core/csv.js";
+import { enrichBatch, type Ledger } from "./core/batch.js";
 import { enrichRow } from "./core/enrich.js";
-import { buildProviders } from "./core/providers.js";
+import { enrichCompany } from "./core/company.js";
+import { buildProviders, DEFAULT_PROVIDERS } from "./core/providers.js";
 import { Cache } from "./core/cache.js";
-import type { Row } from "./core/types.js";
+import { extractEmails, verifyEmails, verifySummary } from "./core/verify.js";
+import type { Provider, Row } from "./core/types.js";
 
 interface Args {
   command: string;
-  file?: string;
+  rest: string[];
   providers: string[];
   noSmtp: boolean;
   smtpTimeoutMs: number;
+  concurrency: number;
+  maxCost: number;
+  dryRun: boolean;
+  out?: string;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? "",
-    file: argv[1] && !argv[1].startsWith("--") ? argv[1] : undefined,
-    providers: ["local"],
+    rest: [],
+    providers: DEFAULT_PROVIDERS,
     noSmtp: false,
     smtpTimeoutMs: 5000,
+    concurrency: 8,
+    maxCost: Infinity,
+    dryRun: false,
   };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--providers") args.providers = (argv[++i] ?? "").split(",").filter(Boolean);
-    else if (a === "--fields") i++; // accepted for spec compat; output is fixed
+    else if (a === "--fields") i++;
     else if (a === "--no-smtp") args.noSmtp = true;
-    else if (a === "--smtp-timeout") args.smtpTimeoutMs = parseInt(argv[++i] ?? "5000", 10);
+    else if (a === "--smtp-timeout") args.smtpTimeoutMs = Number(argv[++i] ?? 5000);
+    else if (a === "--concurrency") args.concurrency = Number(argv[++i] ?? 8);
+    else if (a === "--max-cost") args.maxCost = Number(argv[++i] ?? Infinity);
+    else if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--out") args.out = argv[++i];
+    else if (!a.startsWith("--")) args.rest.push(a);
   }
   return args;
 }
 
 function usage(): never {
   console.error(
-    "Usage: openenrich run <file.csv> [--fields email] [--providers local,prospeo,leadmagic] [--no-smtp] [--smtp-timeout ms]",
+    [
+      "openenrich                       open the app in your browser (no flags, no keys)",
+      "openenrich verify <file|emails>  check a list you already have, write <file>.verified.csv",
+      "openenrich run <file.csv>        enrich a CSV, write <file>.enriched.csv + ledger.json",
+      "openenrich find <name> <domain>  one lookup, prints the email",
+      "openenrich company <domain>      free firmographics for a domain",
+      "",
+      "  --providers a,b       waterfall order (default: scrape,local)",
+      "  --concurrency N       domains in flight (default 8)",
+      "  --max-cost N          hard ceiling on paid lookups for the run",
+      "  --dry-run             free rungs only, then project what paid would cost",
+      "  --no-smtp             skip SMTP verification (pattern + MX only)",
+      "  --smtp-timeout ms     per-connection timeout (default 5000)",
+      "  --out path            output CSV path",
+    ].join("\n"),
   );
   process.exit(1);
 }
 
-async function run(args: Args): Promise<void> {
-  if (!args.file) usage();
+const money = (n: number): string => `$${n.toFixed(2)}`;
 
-  const providers = buildProviders({
-    providers: args.providers,
-    noSmtp: args.noSmtp,
-    smtpTimeoutMs: args.smtpTimeoutMs,
-  });
+const providerOpts = (args: Args) => ({
+  providers: args.providers,
+  noSmtp: args.noSmtp,
+  smtpTimeoutMs: args.smtpTimeoutMs,
+});
+
+async function run(args: Args): Promise<void> {
+  const file = args.rest[0];
+  if (!file) usage();
+
+  const all = buildProviders(providerOpts(args));
+  const providers = args.dryRun ? all.filter((p) => p.cost === 0) : all;
   if (!providers.length) {
-    console.error("No usable providers (missing API keys?). Add 'local' or set keys.");
+    console.error("No usable providers. Add 'local' or set provider API keys.");
     process.exit(1);
   }
 
-  const csvText = readFileSync(args.file, "utf8");
-  const records = parseCsv(csvText);
+  const records = parseCsv(readFileSync(file, "utf8"));
+  const inputs: Row[] = records.map((r) => ({
+    name: r.name,
+    first_name: r.first_name,
+    last_name: r.last_name,
+    domain: r.domain,
+    company_url: r.company_url,
+  }));
+
   const cache = new Cache();
-
-  const enriched: Record<string, unknown>[] = [];
-  const ledger: {
-    rows: any[];
-    totals: { cost: number; resolved: number; verified: number; rows: number };
-    bySource: Record<string, { resolved: number; cost: number }>;
-  } = {
-    rows: [],
-    totals: { cost: 0, resolved: 0, verified: 0, rows: records.length },
-    bySource: {},
-  };
-
-  for (const rec of records) {
-    const row: Row = {
-      name: rec.name,
-      first_name: rec.first_name,
-      last_name: rec.last_name,
-      domain: rec.domain,
-      company_url: rec.company_url,
-    };
-    const result = await enrichRow(row, providers, { cache });
-
-    const outRow: Record<string, unknown> = { ...rec };
-    if (result) {
-      outRow.email = result.email;
-      outRow.source = result.source;
-      outRow.verified = result.verified;
-      outRow.method = result.method;
-      outRow.cost = result.cost;
-
-      ledger.totals.cost += result.cost;
-      ledger.totals.resolved++;
-      if (result.verified) ledger.totals.verified++;
-      const src = (ledger.bySource[result.source] ??= { resolved: 0, cost: 0 });
-      src.resolved++;
-      src.cost += result.cost;
-    } else {
-      outRow.email = "";
-      outRow.source = "";
-      outRow.verified = false;
-      outRow.method = "";
-      outRow.cost = 0;
-    }
-    enriched.push(outRow);
-    ledger.rows.push({
-      name: row.name ?? [row.first_name, row.last_name].filter(Boolean).join(" "),
-      domain: row.domain ?? row.company_url,
-      email: result?.email ?? null,
-      source: result?.source ?? null,
-      verified: result?.verified ?? false,
-      method: result?.method ?? null,
-      cost: result?.cost ?? 0,
-    });
-  }
-
+  const live = process.stderr.isTTY;
+  const { rows, ledger } = await enrichBatch(inputs, providers, {
+    cache,
+    concurrency: args.concurrency,
+    maxCost: args.maxCost,
+    onProgress: (p) => {
+      if (!live) return;
+      process.stderr.write(
+        `\r${p.done}/${p.total} rows · ${p.verified} verified · ${money(p.cost)} spent   `,
+      );
+    },
+  });
+  if (live) process.stderr.write("\r\x1b[K");
   cache.flush();
 
-  const outPath = args.file.replace(/\.csv$/i, "") + ".enriched.csv";
+  if (args.dryRun) {
+    printDryRun(ledger, all);
+    return;
+  }
+
+  const enriched = records.map((rec, i) => ({
+    ...rec,
+    email: rows[i].email,
+    source: rows[i].source,
+    verified: rows[i].verified,
+    method: rows[i].method,
+    pattern: rows[i].pattern ?? "",
+    cost: rows[i].cost,
+    note: rows[i].note ?? "",
+  }));
+
+  const outPath = args.out ?? `${file.replace(/\.csv$/i, "")}.enriched.csv`;
+  const ledgerPath = path.join(path.dirname(outPath), "ledger.json");
   writeFileSync(outPath, toCsv(enriched));
-  const ledgerPath = path.join(path.dirname(args.file), "ledger.json");
-  writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
+  writeFileSync(ledgerPath, JSON.stringify({ ...ledger, rows }, null, 2));
 
-  printSummary(ledger, outPath, ledgerPath);
-}
-
-function fmt(n: number): string {
-  return `$${n.toFixed(2)}`;
-}
-
-function printSummary(ledger: any, outPath: string, ledgerPath: string): void {
-  const parts = Object.entries(ledger.bySource).map(
-    ([src, v]: [string, any]) => `${src} ${v.resolved} resolved ${fmt(v.cost)}`,
-  );
-  console.log("");
-  console.log(parts.join(" / ") || "no rows resolved");
-  console.log(
-    `total ${ledger.totals.resolved}/${ledger.totals.rows} resolved, ${ledger.totals.verified} verified, ${fmt(ledger.totals.cost)}`,
-  );
+  printSummary(ledger);
   console.log(`wrote ${outPath}`);
   console.log(`wrote ${ledgerPath}`);
 }
 
+function printSummary(ledger: Ledger): void {
+  const { totals, bySource } = ledger;
+  const parts = Object.entries(bySource).map(
+    ([source, v]) => `${source} ${v.resolved} resolved (${v.verified} verified) ${money(v.cost)}`,
+  );
+  console.log("");
+  console.log(parts.join(" / ") || "no rows resolved");
+  console.log(
+    `total ${totals.resolved}/${totals.rows} resolved, ${totals.verified} verified, ${money(totals.cost)}`,
+  );
+  if (totals.cached) console.log(`${totals.cached} rows came free from cache (never billed twice)`);
+  console.log(`${totals.patternsKnown} domain email patterns known (reused free next run)`);
+  if (ledger.capped) console.log("cost cap reached: paid providers were skipped for later rows");
+  if (ledger.aborted) console.log("run aborted early");
+}
+
+function printDryRun(ledger: Ledger, all: Provider[]): void {
+  const { totals } = ledger;
+  const gap = totals.rows - totals.verified;
+  const cheapest = all.filter((p) => p.cost > 0).sort((a, b) => a.cost - b.cost)[0];
+  printSummary(ledger);
+  console.log("");
+  console.log(
+    `dry run: ${totals.verified}/${totals.rows} verified for free, ${gap} rows unresolved or unverified`,
+  );
+  console.log(
+    cheapest
+      ? `paid fill-in would cost up to ${money(gap * cheapest.cost)} at ${cheapest.name} (${money(cheapest.cost)}/row)`
+      : "no paid provider keys set, so nothing else to project",
+  );
+  console.log("nothing written (dry run)");
+}
+
+async function find(args: Args): Promise<void> {
+  const [name, domain] = args.rest;
+  if (!name || !domain) usage();
+  const cache = new Cache();
+  const result = await enrichRow({ name, domain }, buildProviders(providerOpts(args)), { cache });
+  cache.flush();
+  if (!result) {
+    console.log("no email found");
+    process.exit(2);
+  }
+  console.log(result.email);
+  console.error(
+    `${result.verified ? "verified" : "unverified"} · ${result.method} · ${result.source} · ${money(result.cost)}${result.note ? ` · ${result.note}` : ""}`,
+  );
+}
+
+async function verify(args: Args): Promise<void> {
+  if (!args.rest.length) usage();
+  const file = args.rest.length === 1 && existsSync(args.rest[0]) ? args.rest[0] : undefined;
+  const emails = extractEmails(file ? readFileSync(file, "utf8") : args.rest.join(" "));
+  if (!emails.length) {
+    console.error("no email addresses found in the input");
+    process.exit(1);
+  }
+
+  const cache = new Cache();
+  const live = process.stderr.isTTY;
+  const rows = await verifyEmails(emails, {
+    smtp: !args.noSmtp,
+    smtpTimeoutMs: args.smtpTimeoutMs,
+    concurrency: args.concurrency,
+    domains: cache.domains,
+    onProgress: (p) => {
+      if (live) process.stderr.write(`\r${p.done}/${p.total} checked   `);
+    },
+  });
+  if (live) process.stderr.write("\r\x1b[K");
+  cache.flush();
+
+  const s = verifySummary(rows);
+  console.log("");
+  console.log(`${s.valid} valid · ${s.invalid} invalid · ${s.risky} risky · ${s.unknown} unknown`);
+  if (s.unknown && s.unknown === s.total) {
+    console.log(`nothing could be proven from this network: ${rows[0].reason}.`);
+    console.log("run it from a VPS with a clean IP, or add a paid provider key.");
+  }
+
+  if (!file) {
+    for (const r of rows) console.log(`${r.status.padEnd(8)} ${r.email}  ${r.reason}`);
+    return;
+  }
+  const outPath = args.out ?? `${file.replace(/\.[^.]+$/, "")}.verified.csv`;
+  writeFileSync(outPath, toCsv(rows));
+  console.log(`wrote ${outPath}`);
+}
+
+async function company(args: Args): Promise<void> {
+  const domain = args.rest[0];
+  if (!domain) usage();
+  const cache = new Cache();
+  const facts = await enrichCompany(domain, cache.domains);
+  cache.flush();
+  console.log(JSON.stringify(facts, null, 2));
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  if (args.command === "run") await run(args);
+  if (!args.command) await import("./web.js");
+  else if (args.command === "verify") await verify(args);
+  else if (args.command === "run") await run(args);
+  else if (args.command === "find") await find(args);
+  else if (args.command === "company") await company(args);
   else usage();
 }
 

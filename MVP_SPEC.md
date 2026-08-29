@@ -45,3 +45,18 @@ Stack: TypeScript, Node 20+, run with `tsx`/`bun`. Zero heavy frameworks. Packag
 
 ## Explicitly OUT of scope for v0
 Web UI, Docker, hosted tier, the pattern-commons dataset, CRM sync, scheduling, more than 2 paid providers. README already covers the vision; build only the above.
+
+## Built (v0 complete)
+
+The spec above shipped, plus the parts that turned out to be load-bearing:
+
+- **Website crawl** (`src/providers/scrape.ts`), which the spec had as optional. Home page plus up to three hinted pages (about, team, contact, impressum), robots.txt honoured, role addresses kept separate from people. A published email that matches the person is the strongest free signal there is.
+- **Per-domain pattern memory** (`src/core/domains.ts`, persisted in the cache). Any verified email teaches the domain its pattern, from the crawl, from SMTP, or from a paid provider. The next colleague at that company is resolved free. This is also the seed of the pattern-commons roadmap.
+- **SMTP reply classification** (`src/providers/local.ts`). A strict mail server refusing a residential IP answers `554 5.7.1`, which is indistinguishable from "no such user" unless the enhanced status code is read. Reading it wrong is how a verifier invents nonexistent people. After three hosts refuse us, probing stops for the process.
+- **One SMTP connection per lookup** instead of one per candidate, with a control probe for catch-all first, and probes serialized per MX host so shared mail hosts do not tarpit us.
+- **Batch engine** (`src/core/batch.ts`): rows bucketed by domain, bounded concurrency, progress callback, abort signal, cost ledger. This is the seam the UI sits on.
+- **Cost cap and dry run**: `--max-cost` is enforced before each paid call, `--dry-run` projects paid spend from a free pass. Row cost is total spend across every provider that answered, not the winner's list price.
+- **`enrich_company`** (`src/core/company.ts`): free firmographics out of bytes the crawl already fetched, plus mail provider from MX.
+- CLI gained `find` and `company`; MCP gained `enrich_company`, `maxCost` and `concurrency`.
+
+Deliberately still out: more paid adapters, the commons dataset, CRM sync, scheduling, hosted tier.

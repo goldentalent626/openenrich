@@ -1,31 +1,47 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { DomainMemory, type DomainFact } from "./domains.js";
 import type { Result } from "./types.js";
 
-/** Minimal JSON file cache keyed by name+domain. A cached hit costs $0. */
+interface CacheFile {
+  version?: number;
+  rows?: Record<string, Result>;
+  domains?: Record<string, DomainFact>;
+}
+
+/**
+ * JSON file cache. Rows are keyed by name+domain and a hit costs $0. Domain facts
+ * (email pattern, catch-all, MX) are keyed by domain and outlive any single row.
+ */
 export class Cache {
   private path: string;
-  private data: Record<string, Result> = {};
+  private rows: Record<string, Result> = {};
+  readonly domains: DomainMemory;
 
   constructor(path = ".openenrich-cache.json") {
     this.path = path;
+    let file: CacheFile = {};
     if (existsSync(path)) {
       try {
-        this.data = JSON.parse(readFileSync(path, "utf8"));
+        const parsed = JSON.parse(readFileSync(path, "utf8"));
+        file = parsed?.version ? parsed : { rows: parsed };
       } catch {
-        this.data = {};
+        file = {};
       }
     }
+    this.rows = file.rows ?? {};
+    this.domains = new DomainMemory(file.domains ?? {});
   }
 
   get(key: string): Result | undefined {
-    return this.data[key];
+    return this.rows[key];
   }
 
   set(key: string, result: Result): void {
-    this.data[key] = result;
+    this.rows[key] = result;
   }
 
   flush(): void {
-    writeFileSync(this.path, JSON.stringify(this.data, null, 2));
+    const file: CacheFile = { version: 2, rows: this.rows, domains: this.domains.toJSON() };
+    writeFileSync(this.path, JSON.stringify(file, null, 2));
   }
 }

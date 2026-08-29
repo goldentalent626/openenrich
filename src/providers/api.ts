@@ -10,9 +10,12 @@ interface ApiConfig {
   parse: (json: any) => { email?: string; verified: boolean };
 }
 
+const BILLING_CODES = new Set([401, 402, 403, 429]);
+
 function apiProvider(cfg: ApiConfig): Provider | null {
   const key = process.env[cfg.keyEnv];
   if (!key) return null;
+  let warned = false;
   return {
     name: cfg.name,
     cost: cfg.cost,
@@ -23,7 +26,14 @@ function apiProvider(cfg: ApiConfig): Provider | null {
           headers: { "Content-Type": "application/json", [cfg.keyHeader]: key },
           body: JSON.stringify(cfg.body(row)),
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+          // A silent skip here reads as "no data" when the real cause is key or credits.
+          if (BILLING_CODES.has(res.status) && !warned) {
+            warned = true;
+            console.error(`openenrich: ${cfg.name} returned ${res.status} (key, plan, or rate limit)`);
+          }
+          return null;
+        }
         const { email, verified } = cfg.parse(await res.json());
         if (!email) return null;
         return { email, source: cfg.name, cost: cfg.cost, verified, method: "api" };

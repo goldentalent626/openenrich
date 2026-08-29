@@ -1,29 +1,40 @@
+#!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { enrichRow } from "./core/enrich.js";
-import { buildProviders } from "./core/providers.js";
+import { enrichBatch } from "./core/batch.js";
+import { enrichCompany } from "./core/company.js";
+import { buildProviders, DEFAULT_PROVIDERS, PROVIDER_NAMES } from "./core/providers.js";
 import { Cache } from "./core/cache.js";
 import { parseCsv, toCsv } from "./core/csv.js";
+import { extractEmails, verifyEmails, verifySummary } from "./core/verify.js";
 import type { Row } from "./core/types.js";
 
 const cache = new Cache();
 
-const server = new McpServer({ name: "openenrich", version: "0.0.0" });
+const server = new McpServer({ name: "openenrich", version: "0.1.0" });
+
+const providersArg = z
+  .array(z.string())
+  .optional()
+  .describe(`Ordered waterfall, from: ${PROVIDER_NAMES.join(", ")}. Defaults to the free rungs.`);
 
 const personShape = {
   name: z.string().describe("Full name, e.g. 'Jane Smith'"),
   domain: z.string().describe("Company domain or URL, e.g. 'acme.com'"),
-  providers: z
-    .array(z.string())
-    .optional()
-    .describe("Ordered provider names; defaults to ['local']"),
+  providers: providersArg,
 };
 
+const json = (value: unknown) => ({
+  content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+});
+
+const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
+
 async function enrichOne(name: string, domain: string, providerNames?: string[]) {
-  const providers = buildProviders({ providers: providerNames ?? ["local"] });
+  const providers = buildProviders({ providers: providerNames ?? DEFAULT_PROVIDERS });
   const result = await enrichRow({ name, domain } as Row, providers, { cache });
   cache.flush();
   return result;
@@ -31,65 +42,83 @@ async function enrichOne(name: string, domain: string, providerNames?: string[])
 
 server.tool(
   "enrich_person",
-  "Enrich a single person to a verified email using the waterfall.",
+  "Enrich a single person to a verified email using the waterfall. Free rungs first.",
   personShape,
-  async ({ name, domain, providers }) => {
-    const result = await enrichOne(name, domain, providers);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  },
+  async ({ name, domain, providers }) => json(await enrichOne(name, domain, providers)),
 );
 
 server.tool(
   "find_email",
-  "Find the best-guess email for a person (alias of enrich_person).",
+  "Find the best email for a person. Returns the address alone.",
   personShape,
   async ({ name, domain, providers }) => {
     const result = await enrichOne(name, domain, providers);
-    return {
-      content: [{ type: "text", text: result?.email ?? "no email found" }],
-    };
+    return text(result?.email ?? "no email found");
+  },
+);
+
+server.tool(
+  "enrich_company",
+  "Free firmographics for a domain: name, description, socials, mail provider, role emails, known email pattern.",
+  { domain: z.string().describe("Company domain or URL") },
+  async ({ domain }) => {
+    const facts = await enrichCompany(domain, cache.domains);
+    cache.flush();
+    return json(facts);
   },
 );
 
 server.tool(
   "enrich_csv",
-  "Enrich a CSV file end to end; writes <file>.enriched.csv and returns a summary.",
+  "Enrich a CSV file end to end; writes <file>.enriched.csv and returns the cost ledger.",
   {
     path: z.string().describe("Path to the input CSV file"),
-    providers: z.array(z.string()).optional(),
+    providers: providersArg,
+    maxCost: z.number().optional().describe("Hard ceiling on paid lookups for this run, in dollars"),
+    concurrency: z.number().optional().describe("Domains in flight, default 8"),
   },
-  async ({ path: csvPath, providers }) => {
-    const providerList = buildProviders({ providers: providers ?? ["local"] });
+  async ({ path: csvPath, providers, maxCost, concurrency }) => {
+    const built = buildProviders({ providers: providers ?? DEFAULT_PROVIDERS });
     const records = parseCsv(readFileSync(csvPath, "utf8"));
-    const out: Record<string, unknown>[] = [];
-    let cost = 0;
-    let resolved = 0;
-    for (const rec of records) {
-      const result = await enrichRow(rec as Row, providerList, { cache });
-      out.push({
-        ...rec,
-        email: result?.email ?? "",
-        source: result?.source ?? "",
-        verified: result?.verified ?? false,
-        method: result?.method ?? "",
-        cost: result?.cost ?? 0,
-      });
-      if (result) {
-        cost += result.cost;
-        resolved++;
-      }
-    }
+    const { rows, ledger } = await enrichBatch(records as Row[], built, {
+      cache,
+      maxCost,
+      concurrency,
+    });
     cache.flush();
-    const outPath = csvPath.replace(/\.csv$/i, "") + ".enriched.csv";
-    writeFileSync(outPath, toCsv(out));
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Enriched ${resolved}/${records.length} rows, total $${cost.toFixed(2)}. Wrote ${outPath}`,
-        },
-      ],
-    };
+
+    const outPath = `${csvPath.replace(/\.csv$/i, "")}.enriched.csv`;
+    writeFileSync(
+      outPath,
+      toCsv(
+        records.map((rec, i) => ({
+          ...rec,
+          email: rows[i].email,
+          source: rows[i].source,
+          verified: rows[i].verified,
+          method: rows[i].method,
+          cost: rows[i].cost,
+        })),
+      ),
+    );
+    return json({ ...ledger, wrote: outPath });
+  },
+);
+
+server.tool(
+  "verify_emails",
+  "Check emails you already have: valid, invalid, risky (catch-all or disposable) or unknown, each with a reason. Give addresses inline or a file path.",
+  {
+    emails: z.array(z.string()).optional().describe("Addresses to check"),
+    path: z.string().optional().describe("Path to a CSV or text file to pull addresses out of"),
+    smtp: z.boolean().optional().describe("Probe mailboxes over SMTP, default true"),
+  },
+  async ({ emails, path: filePath, smtp }) => {
+    const list = extractEmails([...(emails ?? []), filePath ? readFileSync(filePath, "utf8") : ""].join("\n"));
+    if (!list.length) return text("no email addresses found in the input");
+    const rows = await verifyEmails(list, { smtp: smtp ?? true, domains: cache.domains });
+    cache.flush();
+    return json({ summary: verifySummary(rows), rows });
   },
 );
 

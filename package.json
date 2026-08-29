@@ -1,17 +1,37 @@
 {
   "name": "openenrich",
-  "version": "0.0.0",
-  "private": true,
-  "description": "OpenEnrich v0 MVP — CSV lead enrichment waterfall with a free local engine, cost ledger, CLI and MCP server.",
+  "version": "0.1.0",
+  "description": "Free, local email verifier and finder. Check a list you already have, or find the missing addresses. Runs on your machine, nothing is uploaded.",
+  "keywords": [
+    "email-verification",
+    "email-verifier",
+    "email-finder",
+    "bulk-email-validation",
+    "smtp-verification",
+    "lead-enrichment",
+    "clay-alternative",
+    "zerobounce-alternative",
+    "mcp"
+  ],
+  "license": "AGPL-3.0-only",
+  "homepage": "https://openenrich.dev",
+  "repository": { "type": "git", "url": "git+https://github.com/openenrich/openenrich.git" },
   "type": "module",
   "bin": {
-    "openenrich": "src/cli.ts"
+    "openenrich": "dist/cli.js",
+    "openenrich-mcp": "dist/mcp.js"
   },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
   "scripts": {
+    "start": "tsx src/web.ts",
+    "build": "tsc -p tsconfig.build.json",
     "cli": "tsx src/cli.ts",
     "mcp": "tsx src/mcp.ts",
-    "test": "tsx --test test/enrich.test.ts",
-    "web": "tsx src/web.ts"
+    "test": "tsx --test test/*.test.ts",
+    "web": "tsx src/web.ts",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
